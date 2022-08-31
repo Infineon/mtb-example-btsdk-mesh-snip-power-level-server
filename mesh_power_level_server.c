@@ -59,7 +59,6 @@ extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
  ******************************************************/
 #define MESH_PID                0x3018
 #define MESH_VID                0x0002
-#define MESH_CACHE_REPLAY_SIZE  0x0008
 
 /******************************************************
  *          Structures
@@ -71,10 +70,9 @@ extern wiced_bt_cfg_settings_t wiced_bt_cfg_settings;
 static void mesh_app_init(wiced_bool_t is_provisioned);
 static uint32_t mesh_app_proc_rx_cmd(uint16_t opcode, uint8_t *p_data, uint32_t length);
 static void mesh_power_level_server_message_handler(uint8_t element_idx, uint16_t event, void *p_data);
-static void mesh_power_level_process_set_level(uint8_t element_idx, wiced_bt_mesh_power_level_status_data_t *p_data);
-
+static void mesh_power_level_process_status(uint8_t element_idx, wiced_bt_mesh_power_level_status_data_t* p_status);
 #ifdef HCI_CONTROL
-static void mesh_power_level_hci_event_send_set(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_power_level_set_level_t *p_data);
+static void mesh_power_level_hci_event_send_status(uint8_t element_idx, wiced_bt_mesh_power_level_status_data_t* p_data);
 #endif
 
 /******************************************************
@@ -122,7 +120,6 @@ wiced_bt_mesh_core_config_t  mesh_config =
     .company_id         = MESH_COMPANY_ID_CYPRESS,                  // Company identifier assigned by the Bluetooth SIG
     .product_id         = MESH_PID,                                 // Vendor-assigned product identifier
     .vendor_id          = MESH_VID,                                 // Vendor-assigned product version identifier
-    .replay_cache_size  = MESH_CACHE_REPLAY_SIZE,                   // Number of replay protection entries, i.e. maximum number of mesh devices that can send application messages to this device.
 #if defined(LOW_POWER_NODE) && (LOW_POWER_NODE == 1)
     .features           = WICED_BT_MESH_CORE_FEATURE_BIT_LOW_POWER, // A bit field indicating the device features. In Low Power mode no Relay, no Proxy and no Friend
     .friend_cfg         =                                           // Empty Configuration of the Friend Feature
@@ -224,8 +221,8 @@ void mesh_power_level_server_message_handler(uint8_t element_idx, uint16_t event
 {
     switch (event)
     {
-    case WICED_BT_MESH_POWER_LEVEL_SET:
-        mesh_power_level_process_set_level(element_idx, (wiced_bt_mesh_power_level_status_data_t *)p_data);
+    case WICED_BT_MESH_POWER_LEVEL_STATUS:
+        mesh_power_level_process_status(element_idx, (wiced_bt_mesh_power_level_status_data_t *)p_data);
         break;
 
     default:
@@ -262,23 +259,32 @@ uint32_t mesh_app_proc_rx_cmd(uint16_t opcode, uint8_t *p_data, uint32_t length)
 /*
  * Command from the level client is received to set the new level
  */
-void mesh_power_level_process_set_level(uint8_t element_idx, wiced_bt_mesh_power_level_status_data_t *p_status)
+void mesh_power_level_process_status(uint8_t element_idx, wiced_bt_mesh_power_level_status_data_t *p_status)
 {
     WICED_BT_TRACE("power level srv set idx:%d level:%d present:%d remaining:%d\n", element_idx, p_status->target_power, p_status->present_power, p_status->remaining_time);
+
+#ifdef HCI_CONTROL
+    mesh_power_level_hci_event_send_status(element_idx, p_status);
+#endif
 }
 
 #ifdef HCI_CONTROL
 /*
- * Send Power Level Set event over transport
+ * Send Power Level Status event over transport
  */
-void mesh_power_level_hci_event_send_set(wiced_bt_mesh_hci_event_t *p_hci_event, wiced_bt_mesh_power_level_set_level_t *p_data)
+void mesh_power_level_hci_event_send_status(uint8_t element_idx, wiced_bt_mesh_power_level_status_data_t* p_data)
+{
+    wiced_bt_mesh_hci_event_t* p_hci_event = wiced_bt_mesh_alloc_hci_event(element_idx);
+    if (p_hci_event)
 {
     uint8_t *p = p_hci_event->data;
 
-    UINT16_TO_STREAM(p, p_data->level);
-    UINT32_TO_STREAM(p, p_data->transition_time);
-    UINT16_TO_STREAM(p, p_data->delay);
+        UINT16_TO_STREAM(p, p_data->present_power);
+        UINT16_TO_STREAM(p, p_data->target_power);
+        UINT32_TO_STREAM(p, p_data->remaining_time);
 
-    mesh_transport_send_data(HCI_CONTROL_MESH_EVENT_POWER_LEVEL_SET, (uint8_t *)p_hci_event, (uint16_t)(p - (uint8_t *)p_hci_event));
+        mesh_transport_send_data(HCI_CONTROL_MESH_EVENT_POWER_LEVEL_STATUS, (uint8_t*)p_hci_event, (uint16_t)(p - (uint8_t*)p_hci_event));
+    }
 }
+
 #endif
